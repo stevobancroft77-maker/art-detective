@@ -14,6 +14,15 @@ def fetch(url,params):
  req=urllib.request.Request(url+"?"+urllib.parse.urlencode(params,doseq=True),headers={"User-Agent":"ArtDetective/1.0 (archive research)"})
  with urllib.request.urlopen(req,timeout=10) as r:return json.loads(r.read(3000000))
 def search(q,source):
+ if source=="Metropolitan Museum":
+  base="https://collectionapi.metmuseum.org/public/collection/"
+  j=fetch(base+"v1.1/search",{"q":q,"limit":4,"medium":"Paintings"})
+  out=[]
+  for ident in (j.get("objectIDs") or [])[:4]:
+   if not isinstance(ident,int):continue
+   x=fetch(base+"v1/objects/"+str(ident),{})
+   out.append({"url":"https://www.metmuseum.org/art/collection/search/"+str(ident),"title":str(x.get("title") or ""),"description":"; ".join(str(x.get(k) or "") for k in ("artistDisplayName","objectDate","medium","dimensions","creditLine")),"dimensions":str(x.get("dimensions") or ""),"image":x.get("primaryImageSmall","") if x.get("isPublicDomain") else ""})
+  return out
  if source=="Art Institute of Chicago":
   j=fetch("https://api.artic.edu/api/v1/artworks/search",{"q":q,"limit":12,"fields":"id,title,artist_display,date_display,medium_display"})
   return [{"url":"https://www.artic.edu/artworks/"+str(x["id"]),"title":str(x.get("title") or ""),"description":"; ".join(str(x.get(k) or "") for k in ("artist_display","date_display","medium_display"))} for x in j["data"] if x.get("id")]
@@ -45,6 +54,12 @@ def ocr_hit(x,terms):
   if len(words(normalize(snippet)) & terms)>=2:return "OCR lead (verify scan): "+" ".join(snippet.split())
  return None
 def words(s):return set(re.findall(r"[a-z0-9]{3,}",s.lower()))-{"the","and","for","with","from","site","auction","catalogue"}
+def dimension_match(q,description):
+ pattern=r"(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*cm"
+ def pairs(s):return [(float(a.replace(",",".")),float(b.replace(",","."))) for a,b in re.findall(pattern,s,re.I)]
+ targets=pairs(q); actual=pairs(description)
+ if not targets or not actual:return ""
+ return "dimensions approximately match" if any(min(max(abs(a-c),abs(b-d)),max(abs(a-d),abs(b-c)))<=2 for a,b in targets for c,d in actual) else "dimensions differ; check framed versus unframed"
 def assess(name,q,x):
  title=x["title"].lower()
  body=normalize(title+" "+x["description"])
@@ -62,12 +77,15 @@ def assess(name,q,x):
  if not distinctive and not (art and matched_year):return None
  if not art and len(distinctive)<2:return None
  score=min(100,round(65*len(distinctive)/max(1,len(w-years)))+15*art+10*matched_year+10*lot_match)
+ dim=dimension_match(q,x["description"])
+ if dim.startswith("dimensions approximately"):score=min(100,score+15)
  kind="Artwork or subject lead" if len(distinctive)>=2 and art else "Supporting catalogue or provenance lead"
- return dict(score=score,matched_terms=sorted(overlap),category=kind,reason=kind+"; matching terms: "+", ".join(sorted(overlap))+("; year matched" if matched_year else "")+("; lot matched" if lot_match else ""))
+ return dict(score=score,matched_terms=sorted(overlap),category=kind,reason=kind+"; matching terms: "+", ".join(sorted(overlap))+("; year matched" if matched_year else "")+("; lot matched" if lot_match else "")+("; "+dim if dim else ""))
 def run(name,qs):
  hits={}; errors=[]; done=0; ocr_checked=set()
  tasks=[(q,s) for q in qs[:4] for s in ("Internet Archive","Open Library")]
  tasks.append((name,"Art Institute of Chicago"))
+ tasks.append((name,"Metropolitan Museum"))
  tasks.append((name+" auction paintings","Google Books"))
  if any("brueg" in q.lower() for q in qs):
   tasks.extend([("Flemish school flower garland Flora painting auction","Internet Archive"),("Follower of Bruegel flower garland painting","Google Books")])
@@ -125,6 +143,10 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   if not self.auth():return
   u=urllib.parse.urlsplit(self.path)
+  if u.path=="/research-report":
+   name=urllib.parse.parse_qs(u.query).get("case",[""])[0]
+   with lock:result=json.loads(json.dumps(cases.get(name,{"case":name,"results":[],"run":None})))
+   return self.reply(200,{"report":result,"limitations":["Candidates are unverified","Archive coverage is incomplete","No direct auction-site coverage guaranteed"],"manual_auction_plan":auction_plan(name)})
   if u.path=="/auction-directory":
    return self.reply(200,{"houses":AUCTION_HOUSES,"platforms":PLATFORMS,"coverage":"Directory only; direct auction sites not automatically queried"})
   if u.path=="/auction-plan":
