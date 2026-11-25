@@ -146,6 +146,7 @@ def run(name,qs,excluded=(),previous=()):
   cases[name]["run"]["status"]="complete"
   if DB_READY:ad_storage.save(name,cases[name])
 def ai_reason(prompt):
+ prompt="Return exactly one JSON object, not an array or string. "+prompt
  key=os.environ.get("GEMINI_API_KEY","").strip()
  if not key: raise RuntimeError("AI key not configured")
  if not key.isascii() or any(c.isspace() for c in key): raise RuntimeError("AI key contains invalid whitespace or non-ASCII characters")
@@ -176,7 +177,11 @@ def ai_reason(prompt):
  raw="".join(p.get("text","") for p in candidate.get("content",{}).get("parts",[]) if not p.get("thought"))
  try: result=json.loads(raw)
  except ValueError: raise RuntimeError("Gemini returned incomplete or invalid JSON; finish reason: "+str(candidate.get("finishReason","unknown"))) from None
- if not isinstance(result,dict): raise RuntimeError("Gemini returned unexpected JSON structure")
+ if isinstance(result,list) and len(result)==1 and isinstance(result[0],dict): result=result[0]
+ if isinstance(result,str):
+  try: result=json.loads(result)
+  except ValueError: pass
+ if not isinstance(result,dict): raise RuntimeError("Gemini returned unexpected JSON structure: "+type(result).__name__)
  return result
 def ai_run(name,clue,prior):
  evidence=[]; searched=[]; errors=[]; report={}; rejected=0
@@ -203,7 +208,7 @@ def ai_run(name,clue,prior):
        if not any(y["url"]==x["url"] for y in evidence):evidence.append(dict(x,source=source,query=q))
      except Exception as e:errors.append(source+": "+type(e).__name__)
    if len(evidence)>=12:break
-  report=ai_reason("Analyse ONLY supplied metadata, not full texts. Return JSON summary, supported_findings (each with evidence URL), uncertainties, next_leads and suggested_external_sources. Do not infer absence of an object from absence of evidence. Distinguish artwork from medal and namesakes. Clue: "+json.dumps(clue)+" Evidence: "+json.dumps(evidence)[:45000])
+  report=ai_reason("Analyse ONLY supplied metadata, not full texts. Return one JSON object with summary, supported_findings (each with evidence URL), uncertainties, next_leads and suggested_external_sources. Do not infer absence of an object from absence of evidence. Distinguish artwork from medal and namesakes. Clue: "+json.dumps(clue)+" Evidence: "+json.dumps(evidence)[:45000])
   status="complete" if evidence and report.get("supported_findings") else "inconclusive"
  except Exception as e:
   errors.append(str(e) if isinstance(e,RuntimeError) else type(e).__name__+" at line "+str(traceback.extract_tb(e.__traceback__)[-1].lineno));status="failed"
@@ -223,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
   if not self.auth():return
   u=urllib.parse.urlsplit(self.path)
   if u.path=="/ai-status":
-   result={"configured":bool(os.environ.get("GEMINI_API_KEY")),"model":os.environ.get("GEMINI_MODEL","gemini-2.5-flash"),"revision":"54-relevance"}
+   result={"configured":bool(os.environ.get("GEMINI_API_KEY")),"model":os.environ.get("GEMINI_MODEL","gemini-2.5-flash"),"revision":"55-json-repair"}
    try:
     ai_reason('Return JSON object {"ok":true} only.');result["tested"]=True
    except Exception as e:
