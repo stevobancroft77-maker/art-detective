@@ -157,10 +157,21 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   if not self.auth():return
   u=urllib.parse.urlsplit(self.path)
+  if u.path=="/cases":
+   with lock:rows=[{"case":k,"run":v.get("run"),"result_count":len(v.get("results",[]))} for k,v in cases.items()]
+   return self.reply(200,{"cases":rows,"total":len(rows),"persistent":DB_READY})
   if u.path=="/missing-works":
    p=urllib.parse.parse_qs(u.query); term=p.get("q",[""])[0].lower()
    rows=[x for x in (ad_storage.works() if DB_READY else MISSING_WORKS) if term in json.dumps(x).lower()]
-   return self.reply(200,{"works":rows,"registers":REGISTERS,"total":len(rows),"coverage":"Database catalogue; not a live register" if DB_READY else "Starter selection, not complete or live synchronized"})
+   region=p.get("region",[""])[0].lower()
+   status=p.get("status",[""])[0].lower()
+   category=p.get("category",[""])[0].lower()
+   rows=[r for r in rows if (not region or str(r.get("region","unknown")).lower()==region) and (not status or str(r.get("status","unknown")).lower()==status) and (not category or str(r.get("category","unknown")).lower()==category)]
+   total=len(rows)
+   try:
+    offset=max(0,int(p.get("offset",["0"])[0]));limit=min(1000,max(1,int(p.get("limit",["1000"])[0])))
+   except ValueError:return self.reply(400,{"error":"Invalid pagination"})
+   return self.reply(200,{"works":rows[offset:offset+limit],"registers":REGISTERS,"total":total,"offset":offset,"limit":limit,"coverage":"Database catalogue; not a live register" if DB_READY else "Starter selection, not complete or live synchronized"})
   if u.path=="/research-report":
    name=urllib.parse.parse_qs(u.query).get("case",[""])[0]
    with lock:result=json.loads(json.dumps(cases.get(name,{"case":name,"results":[],"run":None})))
@@ -187,6 +198,7 @@ class Handler(BaseHTTPRequestHandler):
     if not 0<n<=2000000:raise ValueError()
     rows=json.loads(self.rfile.read(n))
     if not isinstance(rows,list) or len(rows)>1000 or not all(isinstance(r,dict) and all(isinstance(r.get(k),str) and r[k].strip() for k in ("id","title","source","url")) for r in rows):raise ValueError()
+    if any(not urllib.parse.urlsplit(r["url"]).scheme in ("http","https") or not urllib.parse.urlsplit(r["url"]).netloc or str(r.get("category","")).lower() in ("jewellery","jewelry") for r in rows):raise ValueError()
     return self.reply(200,{"inserted":ad_storage.import_works(rows),"submitted":len(rows)})
    except ValueError:return self.reply(400,{"error":"Invalid records"})
    except Exception:return self.reply(503,{"error":"Database import failed"})
@@ -198,7 +210,7 @@ class Handler(BaseHTTPRequestHandler):
    if j.get("work_id"):
     work=next((w for w in (ad_storage.works() if DB_READY else MISSING_WORKS) if w["id"]==j["work_id"]),None)
     if not work:raise ValueError()
-    name=work["artist"]+" - "+work["title"];qs=[work["artist"]+" "+work["title"],work["title"]+" "+work["dimensions"],work["artist"]+" auction paintings"]
+    artist=str(work.get("artist") or work.get("maker") or "");title=work["title"];name=(artist+" - "+title if artist else title)[:300];qs=[(artist+" "+title).strip(),(title+" "+str(work.get("dimensions") or "")).strip(),(artist+" "+title+" auction").strip()]
    else:name=j["case"];qs=j["queries"]
    if not isinstance(name,str) or not 0<len(name)<=300 or not isinstance(qs,list) or len(qs)>50 or not all(isinstance(q,str) and 0<len(q)<=1000 for q in qs):raise ValueError()
    qs=list(dict.fromkeys(qs))
@@ -206,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
    if not isinstance(excluded,list) or len(excluded)>1000 or not all(isinstance(u,str) and len(u)<=2048 for u in excluded):raise ValueError()
    excluded=set(excluded)
    with lock:
-    if any(x.get("run",{}).get("status")=="running" for x in cases.values()):return self.reply(409,{"error":"Research already running"})
+    if any((x.get("run") or {}).get("status")=="running" for x in cases.values()):return self.reply(409,{"error":"Research already running"})
     if not DB_READY and len(cases)>=20 and name not in cases:cases.pop(next(iter(cases)))
     prior=cases.get(name,{})
     excluded.update(prior.get("excluded",[]))
