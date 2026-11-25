@@ -7,6 +7,8 @@ AUCTION_HOUSES=json.loads("[{\"name\":\"Sotheby's\",\"region\":\"UK\"},{\"name\"
 PLATFORMS=["Invaluable","LiveAuctioneers","The Saleroom","Lot-tissimo","Barnebys","MutualArt","Artnet","Artprice"]
 def auction_plan(subject,offset=0):
  return [{"house":h["name"],"region":h["region"],"mode":"manual indexed-web search","url":"https://www.google.com/search?"+urllib.parse.urlencode({"q":h["name"]+" "+subject+" painting auction"})} for h in AUCTION_HOUSES[offset:offset+20]]
+MISSING_WORKS=json.loads("[{\"id\":\"FBI-00285\",\"title\":\"Colorful Composition\",\"artist\":\"Serge Ferat\",\"dimensions\":\"60 x 81 cm\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-00626\",\"title\":\"Ipswich Bay\",\"artist\":\"Paul Cornoyer\",\"dimensions\":\"10 x 14 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-00583\",\"title\":\"Mountains, Castle and Stream\",\"artist\":\"Samuel Colman\",\"dimensions\":\"9.5 x 17 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-00926\",\"title\":\"Portrait of Old Man\",\"artist\":\"Rembrandt (register attribution)\",\"dimensions\":\"8 x 6 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-01154\",\"title\":\"Auvers-sur-Oise\",\"artist\":\"Paul Cezanne\",\"dimensions\":\"18 x 22 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-01121\",\"title\":\"The Masquerade\",\"artist\":\"P. Balten\",\"dimensions\":\"21.5 x 33.5 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-00008\",\"title\":\"Alice in Wonderland\",\"artist\":\"Max Ernst\",\"dimensions\":\"31.5 x 25.25 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-00006\",\"title\":\"Two White Stars\",\"artist\":\"Alexander Calder\",\"dimensions\":\"73.75 x 108.12 cm\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"}]")
+REGISTERS=[{"name":"FBI National Stolen Art File","url":"https://artcrimes.fbi.gov/nsaf-view","access":"public"},{"name":"INTERPOL","url":"https://www.interpol.int/en/Crimes/Cultural-heritage-crime/Stolen-Works-of-Art-Database","access":"authorized web account or ID-Art app"},{"name":"Lost Art Database","url":"https://www.lostart.de/en","access":"public lookup"}]
 cases={}
 lock=threading.Lock()
 pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -145,6 +147,10 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   if not self.auth():return
   u=urllib.parse.urlsplit(self.path)
+  if u.path=="/missing-works":
+   p=urllib.parse.parse_qs(u.query); term=p.get("q",[""])[0].lower()
+   rows=[x for x in MISSING_WORKS if term in json.dumps(x).lower()]
+   return self.reply(200,{"works":rows,"registers":REGISTERS,"total":len(rows),"coverage":"Starter selection, not complete or live synchronized"})
   if u.path=="/research-report":
    name=urllib.parse.parse_qs(u.query).get("case",[""])[0]
    with lock:result=json.loads(json.dumps(cases.get(name,{"case":name,"results":[],"run":None})))
@@ -168,7 +174,12 @@ class Handler(BaseHTTPRequestHandler):
   try:
    n=int(self.headers.get("Content-Length","0"))
    if not 0<n<=100000:raise ValueError()
-   j=json.loads(self.rfile.read(n));name=j["case"];qs=j["queries"]
+   j=json.loads(self.rfile.read(n))
+   if j.get("work_id"):
+    work=next((w for w in MISSING_WORKS if w["id"]==j["work_id"]),None)
+    if not work:raise ValueError()
+    name=work["artist"]+" - "+work["title"];qs=[work["artist"]+" "+work["title"],work["title"]+" "+work["dimensions"],work["artist"]+" auction paintings"]
+   else:name=j["case"];qs=j["queries"]
    if not isinstance(name,str) or not 0<len(name)<=300 or not isinstance(qs,list) or len(qs)>50 or not all(isinstance(q,str) and 0<len(q)<=1000 for q in qs):raise ValueError()
    qs=list(dict.fromkeys(qs))
    excluded=j.get("excluded",[])
