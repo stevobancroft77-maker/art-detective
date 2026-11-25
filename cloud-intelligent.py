@@ -81,8 +81,9 @@ def assess(name,q,x):
  if dim.startswith("dimensions approximately"):score=min(100,score+15)
  kind="Artwork or subject lead" if len(distinctive)>=2 and art else "Supporting catalogue or provenance lead"
  return dict(score=score,matched_terms=sorted(overlap),category=kind,reason=kind+"; matching terms: "+", ".join(sorted(overlap))+("; year matched" if matched_year else "")+("; lot matched" if lot_match else "")+("; "+dim if dim else ""))
-def run(name,qs):
- hits={}; errors=[]; done=0; ocr_checked=set()
+def run(name,qs,excluded=(),previous=()):
+ excluded=set(excluded)
+ hits={x["url"]:dict(x) for x in previous if x["url"] not in excluded}; old=set(hits); errors=[]; done=0; ocr_checked=set()
  tasks=[(q,s) for q in qs[:4] for s in ("Internet Archive","Open Library")]
  tasks.append((name,"Art Institute of Chicago"))
  tasks.append((name,"Metropolitan Museum"))
@@ -105,6 +106,7 @@ def run(name,qs):
    results=search(q,s)
    before=len(hits)
    for x in results:
+    if x["url"] in excluded:continue
     assessment=assess(name,q,x)
     if assessment is None:continue
     if s=="Internet Archive" and len(ocr_checked)<3 and x["url"] not in ocr_checked and re.search(r"catalog|auction|sale|paintings",x["title"],re.I):
@@ -131,7 +133,7 @@ def run(name,qs):
    errors.append({"query":q,"source":s,"error":detail})
    print("Archive search failure:",s,detail,flush=True)
    follow(q,s)
-  with lock:cases[name]={"case":name,"results":sorted(hits.values(),key=lambda x:-x["score"]),"run":{"time":time.time(),"fresh":len(hits),"errors":errors[:],"completed":done,"attempted":len(tasks),"status":"running"}}
+  with lock:cases[name]={"case":name,"excluded":list(excluded),"results":sorted(hits.values(),key=lambda x:-x["score"])[:300],"run":{"time":time.time(),"fresh":len(set(hits)-old),"total":len(hits),"excluded":len(excluded),"errors":errors[:],"completed":done,"attempted":len(tasks),"status":"running"}}
  with lock:cases[name]["run"]["status"]="complete"
 class Handler(BaseHTTPRequestHandler):
  def reply(self,status,obj):
@@ -155,7 +157,7 @@ class Handler(BaseHTTPRequestHandler):
    try:offset=max(0,int(p.get("offset",["0"])[0]))
    except ValueError:return self.reply(400,{"error":"Invalid offset"})
    return self.reply(200,{"total":len(AUCTION_HOUSES),"links":auction_plan(subject,offset)})
-  if u.path=="/health":return self.reply(200,{"provider":"Public archive APIs","mode":"on-demand","email":False,"interval":0})
+  if u.path=="/health":return self.reply(200,{"provider":"Public archive APIs","mode":"on-demand","email":False,"interval":0,"memory":"session only","supports_exclusions":True})
   if u.path!="/results":return self.reply(404,{})
   name=urllib.parse.parse_qs(u.query).get("case",[""])[0]
   with lock:result=json.loads(json.dumps(cases.get(name,{"case":name,"results":[],"run":None})))
@@ -169,11 +171,17 @@ class Handler(BaseHTTPRequestHandler):
    j=json.loads(self.rfile.read(n));name=j["case"];qs=j["queries"]
    if not isinstance(name,str) or not 0<len(name)<=300 or not isinstance(qs,list) or len(qs)>50 or not all(isinstance(q,str) and 0<len(q)<=1000 for q in qs):raise ValueError()
    qs=list(dict.fromkeys(qs))
+   excluded=j.get("excluded",[])
+   if not isinstance(excluded,list) or len(excluded)>1000 or not all(isinstance(u,str) and len(u)<=2048 for u in excluded):raise ValueError()
+   excluded=set(excluded)
    with lock:
     if any(x.get("run",{}).get("status")=="running" for x in cases.values()):return self.reply(409,{"error":"Research already running"})
     if len(cases)>=20 and name not in cases:cases.pop(next(iter(cases)))
-    cases[name]={"case":name,"results":[],"run":{"status":"running" if qs else "complete","time":time.time(),"fresh":0,"errors":[]}}
-   if qs:pool.submit(run,name,qs)
+    prior=cases.get(name,{})
+    excluded.update(prior.get("excluded",[]))
+    previous=[x for x in prior.get("results",[]) if x["url"] not in excluded][:300]
+    cases[name]={"case":name,"excluded":list(excluded),"results":previous,"run":{"status":"running" if qs else "complete","time":time.time(),"fresh":0,"errors":[]}}
+   if qs:pool.submit(run,name,qs,excluded,previous)
    self.reply(200,{"saved":len(qs),"scheduled":min(4,len(qs)),"mode":"on-demand"})
   except Exception:self.reply(400,{"error":"Invalid watchlist"})
 if __name__=="__main__":
