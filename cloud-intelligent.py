@@ -149,12 +149,20 @@ def ai_reason(prompt):
  key=os.environ.get("GEMINI_API_KEY","").strip()
  if not key: raise RuntimeError("AI key not configured")
  if not key.isascii() or any(c.isspace() for c in key): raise RuntimeError("AI key contains invalid whitespace or non-ASCII characters")
- model=os.environ.get("GEMINI_MODEL","gemini-2.5-flash").strip()
+ preferred=os.environ.get("GEMINI_MODEL","gemini-2.5-flash").strip()
+ try:
+  listing=urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models?pageSize=100",headers={"x-goog-api-key":key})
+  with urllib.request.urlopen(listing,timeout=30) as resp: available=json.load(resp)
+ except urllib.error.HTTPError as e:
+  raise RuntimeError("Gemini model discovery HTTP "+str(e.code)) from None
+ names=[m["name"].removeprefix("models/") for m in available.get("models",[]) if "generateContent" in m.get("supportedGenerationMethods",[]) and "flash" in m.get("name","").lower() and not any(x in m.get("name","").lower() for x in ("image","audio","tts","live","robotics"))]
+ if not names: raise RuntimeError("No compatible Flash model returned by Gemini")
+ model=preferred if preferred in names else next((n for n in names if "lite" in n and "preview" not in n),next((n for n in names if "preview" not in n),names[0]))
  req=urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models/"+urllib.parse.quote(model,safe="")+":generateContent",data=json.dumps({"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"responseMimeType":"application/json","maxOutputTokens":8192}}).encode(),headers={"Content-Type":"application/json","x-goog-api-key":key})
  try:
   with urllib.request.urlopen(req,timeout=90) as resp: data=json.load(resp)
  except urllib.error.HTTPError as e:
-  raise RuntimeError("Gemini HTTP "+str(e.code)+" (check model, key or quota)") from None
+  raise RuntimeError("Gemini HTTP "+str(e.code)+" using "+model) from None
  except ValueError:
   raise RuntimeError("Gemini transport or response decoding failed") from None
  candidates=data.get("candidates",[])
@@ -199,7 +207,7 @@ class Handler(BaseHTTPRequestHandler):
   if not self.auth():return
   u=urllib.parse.urlsplit(self.path)
   if u.path=="/ai-status":
-   result={"configured":bool(os.environ.get("GEMINI_API_KEY")),"model":os.environ.get("GEMINI_MODEL","gemini-2.5-flash"),"revision":"51-diagnostics"}
+   result={"configured":bool(os.environ.get("GEMINI_API_KEY")),"model":os.environ.get("GEMINI_MODEL","gemini-2.5-flash"),"revision":"52-model-discovery"}
    try:
     ai_reason('Return JSON object {"ok":true} only.');result["tested"]=True
    except Exception as e:
