@@ -9,7 +9,13 @@ def auction_plan(subject,offset=0):
  return [{"house":h["name"],"region":h["region"],"mode":"manual indexed-web search","url":"https://www.google.com/search?"+urllib.parse.urlencode({"q":h["name"]+" "+subject+" painting auction"})} for h in AUCTION_HOUSES[offset:offset+20]]
 MISSING_WORKS=json.loads("[{\"id\":\"FBI-00285\",\"title\":\"Colorful Composition\",\"artist\":\"Serge Ferat\",\"dimensions\":\"60 x 81 cm\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-00626\",\"title\":\"Ipswich Bay\",\"artist\":\"Paul Cornoyer\",\"dimensions\":\"10 x 14 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-00583\",\"title\":\"Mountains, Castle and Stream\",\"artist\":\"Samuel Colman\",\"dimensions\":\"9.5 x 17 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-00926\",\"title\":\"Portrait of Old Man\",\"artist\":\"Rembrandt (register attribution)\",\"dimensions\":\"8 x 6 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-01154\",\"title\":\"Auvers-sur-Oise\",\"artist\":\"Paul Cezanne\",\"dimensions\":\"18 x 22 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-01121\",\"title\":\"The Masquerade\",\"artist\":\"P. Balten\",\"dimensions\":\"21.5 x 33.5 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-00008\",\"title\":\"Alice in Wonderland\",\"artist\":\"Max Ernst\",\"dimensions\":\"31.5 x 25.25 in\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"},{\"id\":\"FBI-00006\",\"title\":\"Two White Stars\",\"artist\":\"Alexander Calder\",\"dimensions\":\"73.75 x 108.12 cm\",\"source\":\"FBI National Stolen Art File\",\"url\":\"https://artcrimes.fbi.gov/nsaf-view\",\"status\":\"Listed in source; recheck before investigation\",\"checked\":\"2026-11-25\"}]")
 REGISTERS=[{"name":"FBI National Stolen Art File","url":"https://artcrimes.fbi.gov/nsaf-view","access":"public"},{"name":"INTERPOL","url":"https://www.interpol.int/en/Crimes/Cultural-heritage-crime/Stolen-Works-of-Art-Database","access":"authorized web account or ID-Art app"},{"name":"Lost Art Database","url":"https://www.lostart.de/en","access":"public lookup"}]
+import ad_storage
+DB_READY=False
 cases={}
+class PersistentCases(dict):
+ def __setitem__(self,name,value):
+  if DB_READY:ad_storage.save(name,value)
+  super().__setitem__(name,value)
 lock=threading.Lock()
 pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
 def fetch(url,params):
@@ -136,10 +142,14 @@ def run(name,qs,excluded=(),previous=()):
    print("Archive search failure:",s,detail,flush=True)
    follow(q,s)
   with lock:cases[name]={"case":name,"excluded":list(excluded),"results":sorted(hits.values(),key=lambda x:-x["score"])[:300],"run":{"time":time.time(),"fresh":len(set(hits)-old),"total":len(hits),"excluded":len(excluded),"errors":errors[:],"completed":done,"attempted":len(tasks),"status":"running"}}
- with lock:cases[name]["run"]["status"]="complete"
+ with lock:
+  cases[name]["run"]["status"]="complete"
+  if DB_READY:ad_storage.save(name,cases[name])
 class Handler(BaseHTTPRequestHandler):
  def reply(self,status,obj):
   self.send_response(status);self.send_header("Content-Type","application/json");self.send_header("Access-Control-Allow-Origin",ORIGIN);self.send_header("Access-Control-Allow-Headers","Authorization, Content-Type");self.send_header("Access-Control-Allow-Methods","GET, POST, OPTIONS");self.send_header("Cache-Control","no-store");self.end_headers();self.wfile.write(json.dumps(obj).encode())
+ def do_HEAD(self):
+  self.send_response(200);self.end_headers()
  def do_OPTIONS(self):self.reply(200,{})
  def auth(self):
   if hmac.compare_digest(self.headers.get("Authorization",""),"Bearer "+TOKEN):return True
@@ -149,8 +159,8 @@ class Handler(BaseHTTPRequestHandler):
   u=urllib.parse.urlsplit(self.path)
   if u.path=="/missing-works":
    p=urllib.parse.parse_qs(u.query); term=p.get("q",[""])[0].lower()
-   rows=[x for x in MISSING_WORKS if term in json.dumps(x).lower()]
-   return self.reply(200,{"works":rows,"registers":REGISTERS,"total":len(rows),"coverage":"Starter selection, not complete or live synchronized"})
+   rows=[x for x in (ad_storage.works() if DB_READY else MISSING_WORKS) if term in json.dumps(x).lower()]
+   return self.reply(200,{"works":rows,"registers":REGISTERS,"total":len(rows),"coverage":"Database catalogue; not a live register" if DB_READY else "Starter selection, not complete or live synchronized"})
   if u.path=="/research-report":
    name=urllib.parse.parse_qs(u.query).get("case",[""])[0]
    with lock:result=json.loads(json.dumps(cases.get(name,{"case":name,"results":[],"run":None})))
@@ -163,20 +173,30 @@ class Handler(BaseHTTPRequestHandler):
    try:offset=max(0,int(p.get("offset",["0"])[0]))
    except ValueError:return self.reply(400,{"error":"Invalid offset"})
    return self.reply(200,{"total":len(AUCTION_HOUSES),"links":auction_plan(subject,offset)})
-  if u.path=="/health":return self.reply(200,{"provider":"Public archive APIs","mode":"on-demand","email":False,"interval":0,"memory":"session only","supports_exclusions":True})
+  if u.path=="/health":return self.reply(200,{"provider":"Public archive APIs","mode":"on-demand","email":False,"interval":0,"memory":"postgresql" if DB_READY else "session only","supports_exclusions":True})
   if u.path!="/results":return self.reply(404,{})
   name=urllib.parse.parse_qs(u.query).get("case",[""])[0]
   with lock:result=json.loads(json.dumps(cases.get(name,{"case":name,"results":[],"run":None})))
   self.reply(200,result)
  def do_POST(self):
   if not self.auth():return
+  if self.path=="/import-works":
+   if not DB_READY:return self.reply(503,{"error":"Database unavailable"})
+   try:
+    n=int(self.headers.get("Content-Length","0"))
+    if not 0<n<=2000000:raise ValueError()
+    rows=json.loads(self.rfile.read(n))
+    if not isinstance(rows,list) or len(rows)>1000 or not all(isinstance(r,dict) and all(isinstance(r.get(k),str) and r[k].strip() for k in ("id","title","source","url")) for r in rows):raise ValueError()
+    return self.reply(200,{"inserted":ad_storage.import_works(rows),"submitted":len(rows)})
+   except ValueError:return self.reply(400,{"error":"Invalid records"})
+   except Exception:return self.reply(503,{"error":"Database import failed"})
   if self.path!="/watch":return self.reply(404,{})
   try:
    n=int(self.headers.get("Content-Length","0"))
    if not 0<n<=100000:raise ValueError()
    j=json.loads(self.rfile.read(n))
    if j.get("work_id"):
-    work=next((w for w in MISSING_WORKS if w["id"]==j["work_id"]),None)
+    work=next((w for w in (ad_storage.works() if DB_READY else MISSING_WORKS) if w["id"]==j["work_id"]),None)
     if not work:raise ValueError()
     name=work["artist"]+" - "+work["title"];qs=[work["artist"]+" "+work["title"],work["title"]+" "+work["dimensions"],work["artist"]+" auction paintings"]
    else:name=j["case"];qs=j["queries"]
@@ -187,7 +207,7 @@ class Handler(BaseHTTPRequestHandler):
    excluded=set(excluded)
    with lock:
     if any(x.get("run",{}).get("status")=="running" for x in cases.values()):return self.reply(409,{"error":"Research already running"})
-    if len(cases)>=20 and name not in cases:cases.pop(next(iter(cases)))
+    if not DB_READY and len(cases)>=20 and name not in cases:cases.pop(next(iter(cases)))
     prior=cases.get(name,{})
     excluded.update(prior.get("excluded",[]))
     previous=[x for x in prior.get("results",[]) if x["url"] not in excluded][:300]
@@ -197,4 +217,10 @@ class Handler(BaseHTTPRequestHandler):
   except Exception:self.reply(400,{"error":"Invalid watchlist"})
 if __name__=="__main__":
  if len(TOKEN)<32 or not ORIGIN.startswith("https://"):raise RuntimeError("Configure ART_TOKEN and ART_ORIGIN")
+ if os.environ.get("DATABASE_URL"):
+  try:
+   cases=PersistentCases(ad_storage.initialize(MISSING_WORKS));DB_READY=True
+   print("Art Detective PostgreSQL connected; schema ready",flush=True)
+  except Exception as e:
+   print("Art Detective PostgreSQL unavailable:",type(e).__name__,flush=True)
  ThreadingHTTPServer(("0.0.0.0",int(os.environ.get("PORT","8080"))),Handler).serve_forever()
