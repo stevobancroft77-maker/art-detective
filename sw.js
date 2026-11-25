@@ -1,4 +1,4 @@
-const CACHE='art-detective-shell-v51';const ROOT=new URL('./',self.location.href).href;
+const CACHE='art-detective-shell-v54';const ROOT=new URL('./',self.location.href).href;
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(['./','./index.html','./manifest.webmanifest','./icon-192.svg','./icon-512.svg'])).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('art-detective-shell-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',e=>{const r=e.request;if(r.method!=='GET'||!r.url.startsWith(ROOT)||r.headers.has('Authorization'))return;if(r.mode==='navigate'){e.respondWith(fetch(r,{cache:'reload'}).then(response=>{if(response.ok){const copy=response.clone();caches.open(CACHE).then(c=>c.put(new URL('index.html',ROOT).href,copy))}return response}).catch(()=>caches.match(new URL('index.html',ROOT).href)));return;}e.respondWith(fetch(r).catch(()=>caches.match(r).then(x=>x||Response.error())));});
