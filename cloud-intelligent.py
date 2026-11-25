@@ -167,6 +167,9 @@ class Handler(BaseHTTPRequestHandler):
    status=p.get("status",[""])[0].lower()
    category=p.get("category",[""])[0].lower()
    rows=[r for r in rows if (not region or str(r.get("region","unknown")).lower()==region) and (not status or str(r.get("status","unknown")).lower()==status) and (not category or str(r.get("category","unknown")).lower()==category)]
+   area=p.get('area',[''])[0].lower()
+   if area: rows=[r for r in rows if area==str(r.get('county',r.get('area',''))).lower()]
+   if p.get('photos',[''])[0]=='1': rows=[r for r in rows if r.get('image_url') or r.get('photo_url')]
    priority=p.get('priority',[''])[0].lower()
    if priority: rows=[r for r in rows if r.get('research_priority','standard')==priority]
    rows.sort(key=lambda r:({'high':0,'medium':1,'standard':2}.get(r.get('research_priority'),2),str(r.get('id',''))))
