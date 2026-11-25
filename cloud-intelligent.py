@@ -147,7 +147,7 @@ def run(name,qs,excluded=(),previous=()):
   if DB_READY:ad_storage.save(name,cases[name])
 class Handler(BaseHTTPRequestHandler):
  def reply(self,status,obj):
-  self.send_response(status);self.send_header("Content-Type","application/json");self.send_header("Access-Control-Allow-Origin",ORIGIN);self.send_header("Access-Control-Allow-Headers","Authorization, Content-Type");self.send_header("Access-Control-Allow-Methods","GET, POST, OPTIONS");self.send_header("Cache-Control","no-store");self.end_headers();self.wfile.write(json.dumps(obj).encode())
+  self.send_response(status);self.send_header("Content-Type","application/json");self.send_header("Access-Control-Allow-Origin",self.headers.get("Origin") if self.headers.get("Origin") in {ORIGIN,"https://stevobancroft77-maker.github.io"} else ORIGIN);self.send_header("Vary","Origin");self.send_header("Access-Control-Allow-Headers","Authorization, Content-Type");self.send_header("Access-Control-Allow-Methods","GET, POST, OPTIONS");self.send_header("Cache-Control","no-store");self.end_headers();self.wfile.write(json.dumps(obj).encode())
  def do_HEAD(self):
   self.send_response(200);self.end_headers()
  def do_OPTIONS(self):self.reply(200,{})
