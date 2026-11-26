@@ -187,14 +187,7 @@ def ai_reason(prompt):
  if not key: raise RuntimeError("AI key not configured")
  if not key.isascii() or any(c.isspace() for c in key): raise RuntimeError("AI key contains invalid whitespace or non-ASCII characters")
  preferred=os.environ.get("GEMINI_MODEL","gemini-2.5-flash").strip()
- try:
-  listing=urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models?pageSize=100",headers={"x-goog-api-key":key})
-  with ai_urlopen(listing,timeout=30) as resp: available=json.load(resp)
- except urllib.error.HTTPError as e:
-  raise RuntimeError("Gemini model discovery HTTP "+str(e.code)) from None
- names=[m["name"].removeprefix("models/") for m in available.get("models",[]) if "generateContent" in m.get("supportedGenerationMethods",[]) and "flash" in m.get("name","").lower() and not any(x in m.get("name","").lower() for x in ("image","audio","tts","live","robotics"))]
- if not names: raise RuntimeError("No compatible Flash model returned by Gemini")
- ordered=sorted(set(names),key=lambda n:(n!=preferred,"preview" in n,"lite" not in n,n))
+ ordered=[preferred]
  failures=[]
  for model in ordered[:5]:
   req=urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models/"+urllib.parse.quote(model,safe="")+":generateContent",data=json.dumps({"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"responseMimeType":"application/json","maxOutputTokens":8192}}).encode(),headers={"Content-Type":"application/json","x-goog-api-key":key})
@@ -318,7 +311,7 @@ def ai_run(name,clue,prior):
    report["suggested_external_sources"].extend(["Imperial War Museums catalogue (manual): https://www.iwm.org.uk/collections/search?"+urllib.parse.urlencode({"query":next((q for q in searched if q),name)}),"British Newspaper Archive (manual): https://www.britishnewspaperarchive.co.uk/","Historic Hansard (manual): https://api.parliament.uk/historic-hansard/newsearch.html"])
   status="complete" if evidence and report.get("supported_findings") else "inconclusive"
  except Exception as e:
-  errors.append(str(e) if isinstance(e,RuntimeError) else type(e).__name__+" at line "+str(traceback.extract_tb(e.__traceback__)[-1].lineno));status="partial" if evidence else "inconclusive"
+  errors.append(str(e) if isinstance(e,RuntimeError) else type(e).__name__+" at line "+str(traceback.extract_tb(e.__traceback__)[-1].lineno));print("AI investigation interrupted:",errors[-1] if isinstance(e,RuntimeError) and errors[-1].startswith(("Gemini ","Daily AI ","AI budget ","AI key ")) else type(e).__name__,flush=True);status="partial" if evidence else "inconclusive"
   if not report: report={"summary":"Research interrupted by a service or processing error. No conclusion about the object can be drawn.","supported_findings":[],"uncertainties":["Research incomplete; candidate metadata has not been verified."],"next_leads":["Retry the investigation when services recover."],"suggested_external_sources":[]}
  with lock:
   cases[name]={**cases.get(name,{}),"case":name,"ai":{"clue":clue,"evidence":evidence[:150],"searched":searched[-120:],"attempted":sorted(attempted)[-600:],"report":report,"errors":errors,"rejected":rejected},"run":{"status":status,"time":time.time(),"total":len(evidence)}}
@@ -341,7 +334,7 @@ class Handler(BaseHTTPRequestHandler):
    self.send_response(200);self.send_header("Content-Type",STATIC_TYPES[file.suffix]);self.send_header("Content-Length",str(len(data)));self.send_header("Cache-Control","no-cache");self.send_header("X-Content-Type-Options","nosniff");self.send_header("X-Frame-Options","DENY");self.end_headers();self.wfile.write(data);return
   if not self.auth():return
   if u.path=="/ai-status":
-   result={"configured":bool(os.environ.get("GEMINI_API_KEY")),"model":os.environ.get("GEMINI_MODEL","gemini-2.5-flash"),"revision":"74-persistent-ai-budget"}
+   result={"configured":bool(os.environ.get("GEMINI_API_KEY")),"model":os.environ.get("GEMINI_MODEL","gemini-2.5-flash"),"revision":"76-reliability"}
    try:
     ai_reason('Return JSON object {"ok":true} only.');result["tested"]=True
    except Exception as e:
