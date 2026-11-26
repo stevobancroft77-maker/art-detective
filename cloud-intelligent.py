@@ -270,7 +270,7 @@ def ai_run(name,clue,prior):
  if same: evidence=list(prior.get("evidence",[]))[:150]
  if same: searched=list(prior.get("searched",[]))[-120:]
  try:
-  if os.environ.get("AD_ENABLE_GROUNDING")=="1":
+  if os.environ.get("AD_ENABLE_GROUNDING")=="1" and ai_budget_status()["remaining"]>=3:
    try:
     for x in grounded_candidates(clue,leads):
      if not any(y["url"]==x["url"] for y in evidence): evidence.append(x)
@@ -312,6 +312,7 @@ def ai_run(name,clue,prior):
       if msg not in errors: errors.append(msg)
    with lock:
     cases[name]={**cases.get(name,{}),"case":name,"ai":{"clue":clue,"evidence":evidence[:150],"searched":searched[-120:],"attempted":sorted(attempted)[-600:],"report":{"summary":"Research in progress","next_leads":leads},"errors":errors,"rejected":rejected},"run":{"status":"running","time":time.time(),"total":len(evidence)}}
+    if DB_READY:ad_storage.save(name,cases[name])
    if time.monotonic()>deadline: break
    if round_no==1 or ai_budget_status()["remaining"]<3: break
    assessment=ai_reason("Generate one JSON object with next_leads (up to four specific search tasks with names, titles and dates), based on this clue and candidate metadata. Do not invent evidence. Avoid already searched queries. Clue: "+json.dumps(clue)+" Candidates: "+json.dumps(evidence[-20:])[:18000]+" Searched: "+json.dumps(searched[-60:]))
@@ -328,6 +329,7 @@ def ai_run(name,clue,prior):
   if not report: report={"summary":"Research interrupted by a service or processing error. No conclusion about the object can be drawn.","supported_findings":[],"uncertainties":["Research incomplete; candidate metadata has not been verified."],"next_leads":["Retry the investigation when services recover."],"suggested_external_sources":[]}
  with lock:
   cases[name]={**cases.get(name,{}),"case":name,"ai":{"clue":clue,"evidence":evidence[:150],"searched":searched[-120:],"attempted":sorted(attempted)[-600:],"report":report,"errors":errors,"rejected":rejected},"run":{"status":status,"time":time.time(),"total":len(evidence)}}
+  if DB_READY:ad_storage.save(name,cases[name])
 
 class Handler(BaseHTTPRequestHandler):
  def reply(self,status,obj):
