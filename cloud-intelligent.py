@@ -440,7 +440,7 @@ class Handler(BaseHTTPRequestHandler):
      if any((x.get("run") or {}).get("status")=="running" for x in cases.values()):return self.reply(409,{"error":"Research already running"})
      prior=cases.get(name,{})
      cases[name]={**prior,"case":name,"run":{"status":"running","time":time.time()}}
-    pool.submit(ai_run,name,clue,prior.get("ai",{}))
+    pool.submit(ai_run,name,clue,prior.get("ai",{}),independent)
     return self.reply(202,{"case":name,"status":"running"})
    except Exception:return self.reply(400,{"error":"Invalid AI investigation"})
   if self.path=="/import-works":
